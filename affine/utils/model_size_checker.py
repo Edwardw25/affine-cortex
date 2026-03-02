@@ -57,6 +57,14 @@ _ARCH_FIELDS: Dict[str, Dict[str, str]] = {
     "falcon": {},
     "gpt_neox": {},
     "command_r": {},
+    "cohere": {},
+    "cohere2": {},
+    "internlm2": {},
+    "opt": {"i": "ffn_dim"},
+    "gpt2": {"h": "n_embd", "L": "n_layer", "i": "n_inner", "n_heads": "n_head"},
+    "gpt_bigcode": {"h": "n_embd", "L": "n_layer", "i": "n_inner", "n_heads": "n_head"},
+    "gpt_neo": {"L": "num_layers"},
+    "bloom": {"L": "n_layer", "n_heads": "n_head"},
 
     # --- Common MoE architectures ---
     "qwen2_moe": {},
@@ -93,6 +101,11 @@ _MULTIMODAL_TEXT_CONFIG: Dict[str, str] = {
     "qwen3_5_moe": "text_config",
     "kimi_k25": "text_config",
     "gemma3": "text_config",
+    "llava": "text_config",
+    "llava_next": "text_config",
+    "llava_onevision": "text_config",
+    "paligemma": "text_config",
+    "paligemma2": "text_config",
 }
 
 
@@ -126,7 +139,7 @@ def _estimate_params(config: dict) -> Optional[int]:
         h = config[fields.get("h", "hidden_size")]
         L = config[fields.get("L", "num_hidden_layers")]
         V = config[fields.get("V", "vocab_size")]
-        i = config.get(fields.get("i", "intermediate_size"), h * 4)
+        i = config.get(fields.get("i", "intermediate_size")) or h * 4
         n_heads = config[fields.get("n_heads", "num_attention_heads")]
         n_kv = config.get(fields.get("n_kv", "num_key_value_heads"), n_heads)
         head_dim = config.get("head_dim", h // n_heads)
@@ -134,7 +147,8 @@ def _estimate_params(config: dict) -> Optional[int]:
         return None  # Missing required fields → fail-closed
 
     # === Embedding ===
-    embed = 2 * V * h  # embedding + lm_head
+    tied = config.get("tie_word_embeddings", False)
+    embed = V * h if tied else 2 * V * h
 
     # === Attention per layer ===
     attn = 2 * h * head_dim * (n_heads + n_kv)
