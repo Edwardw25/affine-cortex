@@ -21,7 +21,7 @@ from .detector import AntiCopyDetector
 from .loader import LogprobsLoader
 
 
-DEFAULT_INTERVAL = 21600  # 6 hours
+DEFAULT_INTERVAL = 86400  # 24 hours
 
 
 class AntiCopyService:
@@ -159,16 +159,35 @@ class AntiCopyService:
         for r in copy_pairs:
             logger.warning(f"[AntiCopy] {r}")
 
-        # Save to DB
-        if copy_pairs:
-            records = self._build_copy_records(copy_pairs, miner_info)
+        # Save to DB: write results for ALL evaluated miners
+        # so that previously-flagged miners get cleared when no longer copy
+        copy_records = self._build_copy_records(copy_pairs, miner_info) if copy_pairs else []
+        copy_uids = {r["uid"] for r in copy_records}
+
+        # Build clean records for non-copy miners that were evaluated
+        clean_records = []
+        for uid in miner_data:
+            if uid not in copy_uids:
+                info = miner_info[uid]
+                clean_records.append({
+                    "uid": uid,
+                    "hotkey": info["hotkey"],
+                    "model": info["model"],
+                    "revision": info["revision"],
+                    "block": info["block"],
+                    "is_copy": False,
+                    "copy_of": [],
+                })
+
+        all_records = copy_records + clean_records
+        if all_records:
             dao = AntiCopyDAO()
             round_ts = int(time.time())
-            await dao.save_round(records, round_timestamp=round_ts)
-            copy_count = sum(1 for r in records if r["is_copy"])
+            await dao.save_round(all_records, round_timestamp=round_ts)
+            copy_count = sum(1 for r in all_records if r["is_copy"])
             logger.info(
-                f"[AntiCopy] Saved {len(records)} records "
-                f"({copy_count} copies) to DB"
+                f"[AntiCopy] Saved {len(all_records)} records "
+                f"({copy_count} copies, {len(clean_records)} clean) to DB"
             )
 
     async def _loop(self):
