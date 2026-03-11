@@ -2148,6 +2148,169 @@ def delete_paused(uid: int, env: str):
     asyncio.run(cmd_delete_paused(uid, env))
 
 
+async def cmd_pareto(uids: list):
+    """Compare miners using Pareto dominance on intersecting environments.
+
+    Fetches scoring data from the API, builds MinerData via Stage 1,
+    then applies Pareto comparison logic on common tasks per environment.
+    """
+    from affine.utils.api_client import cli_api_client
+    from affine.src.scorer.config import ScorerConfig
+    from affine.src.scorer.stage1_collector import Stage1Collector
+    from affine.src.scorer.utils import calculate_required_score
+
+    config = ScorerConfig()
+
+    async with cli_api_client() as api_client:
+        # Fetch scoring data and environment config
+        print("Fetching scoring data from API...")
+        scoring_data = await api_client.get("/samples/scoring?range_type=scoring")
+        if isinstance(scoring_data, dict) and scoring_data.get("success") is False:
+            print(f"API error: {scoring_data.get('error', 'unknown')}")
+            sys.exit(1)
+
+        env_response = await api_client.get("/config/environments")
+        env_value = env_response.get("param_value", {}) if isinstance(env_response, dict) else {}
+        environments = [
+            name for name, cfg in env_value.items()
+            if isinstance(cfg, dict) and cfg.get("enabled_for_scoring", False)
+        ]
+        env_configs = {
+            name: cfg for name, cfg in env_value.items()
+            if isinstance(cfg, dict) and cfg.get("enabled_for_scoring", False)
+        }
+
+        if not environments:
+            print("No scoring environments found.")
+            sys.exit(1)
+
+        # Stage 1: collect miner data
+        collector = Stage1Collector(config)
+        stage1 = collector.collect(scoring_data, environments, env_configs)
+
+        # Resolve UIDs
+        miners = {}
+        for uid in uids:
+            if uid not in stage1.miners:
+                print(f"Error: UID {uid} not found in scoring data")
+                sys.exit(1)
+            miners[uid] = stage1.miners[uid]
+
+        miner_list = list(miners.values())
+
+        # Find intersecting valid environments
+        valid_envs_per_miner = [
+            {env for env, s in m.env_scores.items() if s.is_valid}
+            for m in miner_list
+        ]
+        common_envs = sorted(valid_envs_per_miner[0].intersection(*valid_envs_per_miner[1:]))
+
+        if not common_envs:
+            print("No common valid environments between the specified miners.")
+            return
+
+        # Print miner info header
+        print()
+        for m in miner_list:
+            print(f"UID {m.uid}: {m.model_repo}  (first_block={m.first_block})")
+        print()
+
+        # Sort by first_block for A/B ordering
+        sorted_miners = sorted(miner_list, key=lambda m: (m.first_block, m.uid))
+
+        # Pairwise comparison for all UID pairs
+        for i in range(len(sorted_miners)):
+            for j in range(i + 1, len(sorted_miners)):
+                miner_a = sorted_miners[i]
+                miner_b = sorted_miners[j]
+
+                print("=" * 90)
+                print(f"  A = UID {miner_a.uid} (first_block={miner_a.first_block})")
+                print(f"  B = UID {miner_b.uid} (first_block={miner_b.first_block})")
+                print(f"  Threshold rule: B must beat  score_A + gap  (gap from SE-based confidence interval)")
+                print("=" * 90)
+
+                # Table header
+                header = f"{'Environment':<28} {'Tasks':>5} {'Score_A':>8} {'Score_B':>8} {'Threshold':>10} {'Gap':>7} {'Winner':>6}"
+                print(header)
+                print("-" * len(header))
+
+                a_wins = 0
+                b_wins = 0
+
+                for env in common_envs:
+                    env_score_a = miner_a.env_scores[env]
+                    env_score_b = miner_b.env_scores[env]
+
+                    # Align on common tasks
+                    common_tasks = set(env_score_a.all_task_scores) & set(env_score_b.all_task_scores)
+                    if common_tasks:
+                        score_a = sum(env_score_a.all_task_scores[t] for t in common_tasks) / len(common_tasks)
+                        score_b = sum(env_score_b.all_task_scores[t] for t in common_tasks) / len(common_tasks)
+                        env_threshold_config = config.ENV_THRESHOLD_CONFIGS.get(env, {})
+                        threshold = calculate_required_score(
+                            score_a,
+                            len(common_tasks),
+                            env_threshold_config.get('z_score', config.Z_SCORE),
+                            env_threshold_config.get('min_improvement', config.MIN_IMPROVEMENT),
+                            env_threshold_config.get('max_improvement', config.MAX_IMPROVEMENT),
+                        )
+                    else:
+                        score_a = env_score_a.avg_score
+                        score_b = env_score_b.avg_score
+                        threshold = env_score_a.threshold
+                        common_tasks = set()
+
+                    gap = threshold - score_a
+                    b_beats = score_b > (threshold + 1e-9)
+                    winner = "B" if b_beats else "A"
+
+                    if b_beats:
+                        b_wins += 1
+                    else:
+                        a_wins += 1
+
+                    # Color-code: mark B wins with *
+                    mark = "*" if b_beats else " "
+                    print(
+                        f"{env:<28} {len(common_tasks):>5} "
+                        f"{score_a:>8.4f} {score_b:>8.4f} {threshold:>10.4f} "
+                        f"{gap:>+7.4f} {winner:>5}{mark}"
+                    )
+
+                print("-" * len(header))
+
+                # Dominance summary
+                total = len(common_envs)
+                if a_wins == total:
+                    result = f"UID {miner_a.uid} DOMINATES UID {miner_b.uid} (A wins all {total} envs)"
+                elif b_wins == total:
+                    result = f"UID {miner_b.uid} DOMINATES UID {miner_a.uid} (B wins all {total} envs)"
+                else:
+                    result = f"No dominance (A wins {a_wins}/{total}, B wins {b_wins}/{total})"
+
+                print(f"\nResult: {result}")
+                print()
+
+
+@db.command("pareto")
+@click.argument("uids", nargs=-1, required=True, type=UID)
+def pareto(uids):
+    """Compare miners using Pareto dominance on intersecting environments.
+
+    Shows per-environment aligned scores, thresholds, and dominance results
+    between the specified miners, following Stage 2 Pareto logic.
+
+    Examples:
+        af db pareto 42 100
+        af db pareto 5 10 20
+    """
+    if len(uids) < 2:
+        print("Error: At least 2 UIDs are required.")
+        sys.exit(1)
+    asyncio.run(cmd_pareto(list(uids)))
+
+
 def main():
     """Main CLI entry point."""
     db()
