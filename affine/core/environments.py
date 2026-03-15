@@ -204,7 +204,7 @@ _ENV_CONFIGS_CANONICAL = {
             }
         },
         eval_params={
-            "max_iterations": 30,
+            "max_iterations": 50,
             "temperature": 0.0,
             "timeout": 7200,
         },
