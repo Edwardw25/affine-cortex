@@ -189,6 +189,27 @@ _ENV_CONFIGS_CANONICAL = {
         },
         proxy_timeout=7300,
     ),
+    # SWE-bench Infinite environment (requires R2 credentials for dataset/artifact access)
+    "swe-infinite": EnvConfig(
+        name="swe-infinite",
+        docker_image="affinefoundation/swebench:infinite",
+        env_type="swebench",
+        env_vars={"UVICORN_WORKERS": "10"},
+        required_env_vars=["DOCKER_HUB_USERNAME", "DOCKER_HUB_TOKEN", "HF_TOKEN"],
+        mem_limit="10g",
+        volumes={
+            "/var/run/docker.sock": {
+                "bind": "/var/run/docker.sock",
+                "mode": "rw"
+            }
+        },
+        eval_params={
+            "max_iterations": 30,
+            "temperature": 0.0,
+            "timeout": 7200,
+        },
+        proxy_timeout=7300,
+    ),
     "print": EnvConfig(
         name="print",
         docker_image="affinefoundation/cde:print",
@@ -295,6 +316,7 @@ _ENV_ALIASES = {
     # SWE-bench aliases
     "SWE-PRO": "swe-pro",
     "SWE-SYNTH": "swe-synth",
+    "SWE-INFINITE": "swe-infinite",
     
     # Print aliases
     "PRINT": "print",
@@ -682,6 +704,7 @@ LGC_V2_factory = lambda mode=None: create_environment("lgc-v2", mode=mode)
 GAME_factory = lambda mode=None: create_environment("game", mode=mode)
 SWE_PRO_factory = lambda mode=None: create_environment("swe-pro", mode=mode)
 SWE_SYNTH_factory = lambda mode=None: create_environment("swe-synth", mode=mode)
+SWE_INFINITE_factory = lambda mode=None: create_environment("swe-infinite", mode=mode)
 PRINT_factory = lambda mode=None: create_environment("print", mode=mode)
 ARC_GEN_factory = lambda mode=None: create_environment("arc-gen", mode=mode)
 
@@ -700,6 +723,7 @@ PRINT = PRINT_factory
 # SWE-bench factories
 SWE_PRO = SWE_PRO_factory
 SWE_SYNTH = SWE_SYNTH_factory
+SWE_INFINITE = SWE_INFINITE_factory
 
 # ARC-GEN factory
 ARC_GEN = ARC_GEN_factory

@@ -121,6 +121,7 @@ class ScorerConfig:
         'GAME': {'z_score': 1},    # easier to beat (default 1.5)
         'PRINT': {'z_score': 2.0},   # harder to beat (default 1.5)
         'SWE-SYNTH': {'z_score': 2.0},
+        'SWE-INFINITE': {'z_score': 2.0},
     }
     
     # Database & Storage
