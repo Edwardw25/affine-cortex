@@ -283,19 +283,19 @@ async def run_openskill_scoring(
         sampling_list = sampling_cfg.get('sampling_list', [])
         env_window_sizes[env_name] = len(sampling_list)
 
-        if not cold_start:
-            # Normal mode: only process tasks that have left the window
-            current_window = set(sampling_list)
-            all_task_ids = set(env_task_scores[env_name].keys())
-            rotated_out = all_task_ids - current_window
-            env_task_scores[env_name] = {
-                tid: scores for tid, scores in env_task_scores[env_name].items()
-                if tid in rotated_out
-            }
-            logger.info(
-                f"OpenSkill {env_name}: {len(rotated_out)} rotated-out tasks, "
-                f"{len(current_window)} in current window"
-            )
+        # Only process tasks outside the current sampling window
+        # (tasks still in window may have miners that haven't completed yet)
+        current_window = set(sampling_list)
+        all_task_ids = set(env_task_scores[env_name].keys())
+        rotated_out = all_task_ids - current_window
+        env_task_scores[env_name] = {
+            tid: scores for tid, scores in env_task_scores[env_name].items()
+            if tid in rotated_out
+        }
+        logger.info(
+            f"OpenSkill {env_name}: {len(rotated_out)} rotated-out tasks, "
+            f"{len(current_window)} in current window"
+        )
 
     # Process tasks per env
     total_processed = 0
