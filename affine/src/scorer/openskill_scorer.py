@@ -306,21 +306,24 @@ class OpenSkillScorer:
                 f"top-3 sigmoid sum={sum(top3):.3f}"
             )
 
-        # Geometric mean across envs
+        # Weighted geometric mean across envs
         final: Dict[str, float] = {}
         for miner_key in all_ratings:
-            vals = [
-                env_sigmoid[env][miner_key]
-                for env in environments
-                if env in env_sigmoid and miner_key in env_sigmoid[env]
-            ]
+            vals = []
+            ws = []
+            for env in environments:
+                if env in env_sigmoid and miner_key in env_sigmoid[env]:
+                    vals.append(env_sigmoid[env][miner_key])
+                    ws.append(self.config.ENV_WEIGHTS.get(
+                        env, self.config.ENV_DEFAULT_WEIGHT
+                    ))
             if len(vals) < self.config.MIN_QUALIFIED_ENVS:
                 continue
-            # Geometric mean
-            product = 1.0
-            for v in vals:
-                product *= max(v, 1e-9)
-            final[miner_key] = product ** (1.0 / len(vals))
+            total_w = sum(ws)
+            log_sum = sum(
+                w * math.log(max(v, 1e-9)) for v, w in zip(vals, ws)
+            )
+            final[miner_key] = math.exp(log_sum / total_w)
 
         # Rank by geometric mean, apply decay^(rank-1)
         # Reuse DECAY_FACTOR and threshold logic from ScorerConfig

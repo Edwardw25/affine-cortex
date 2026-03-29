@@ -30,6 +30,18 @@ class OpenSkillConfig:
     SIGMA_FLOOR_RATIO: float = 0.5
     """sigma cannot go below SIGMA_INIT * this ratio. 0.5 means floor ≈ 4.17."""
 
+    # Environment weights for weighted geometric mean
+    # Higher weight = more influence on final ranking
+    ENV_WEIGHTS: Dict[str, float] = {
+        'GAME': 1.0,
+        'LGC-v2': 0.5,
+        'LIVEWEB': 2.0,
+        'NAVWORLD': 2.0,
+        'PRINT': 0.5,
+        'SWE-INFINITE': 2.0,
+    }
+    ENV_DEFAULT_WEIGHT: float = 1.0
+
     # Match constraints
     MIN_PARTICIPANTS: int = 2
     """Skip tasks with fewer participants."""
