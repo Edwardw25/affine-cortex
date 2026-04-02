@@ -142,22 +142,29 @@ class TeacherWorker:
             tmp._mode_override = None
             hosts, mode = tmp._get_hosts_and_mode()
 
-            try:
-                # Container names are "{env}-{index}", e.g. game-0, navworld-0
-                base_name = env_name.lower().replace(":", "-")
-                env_instance = af_env.load_env(
-                    image=config.docker_image,
-                    mode=mode,
-                    hosts=[hosts[0]] if hosts else None,
-                    replicas=1,
-                    container_name=f"{base_name}-0",
-                    connect_only=True,
-                )
-                self._env_instances[env_name] = env_instance
-                logger.info(f"[TEACHER] Connected to {env_name} ({mode}, hosts={hosts})")
-            except Exception as e:
-                logger.error(f"[TEACHER] Failed to connect to {env_name}: {e}")
-                return None
+            # Retry connection — container may still be starting up
+            base_name = env_name.lower().replace(":", "-")
+            for attempt in range(6):
+                try:
+                    env_instance = af_env.load_env(
+                        image=config.docker_image,
+                        mode=mode,
+                        hosts=[hosts[0]] if hosts else None,
+                        replicas=1,
+                        container_name=f"{base_name}-0",
+                        connect_only=True,
+                    )
+                    self._env_instances[env_name] = env_instance
+                    logger.info(f"[TEACHER] Connected to {env_name} ({mode}, hosts={hosts})")
+                    break
+                except Exception as e:
+                    if attempt < 5:
+                        wait = 10 * (attempt + 1)
+                        logger.warning(f"[TEACHER] {env_name} not ready, retrying in {wait}s ({e})")
+                        await asyncio.sleep(wait)
+                    else:
+                        logger.error(f"[TEACHER] Failed to connect to {env_name} after 6 attempts: {e}")
+                        return None
 
         return self._env_instances[env_name]
 
