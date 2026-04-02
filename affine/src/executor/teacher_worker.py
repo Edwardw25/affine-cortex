@@ -121,37 +121,41 @@ class TeacherWorker:
         return sampling_config.get("sampling_list", [])
 
     async def _get_env(self, env_name: str):
-        """Get environment instance by connecting to existing container via URL mode.
+        """Get environment instance by connecting to existing containers.
 
-        Reuses containers started by regular executor workers. Discovers
-        container IP from Docker by the canonical container name.
+        Uses connect_only=True to attach to containers already started by
+        regular workers, without recreating them.
         """
         if env_name not in self._env_instances:
-            import subprocess
             import affinetes as af_env
+            from affine.core.environments import SDKEnvironment, ENV_CONFIGS
 
-            # Regular workers name containers as env_name with : replaced by -
-            container_name = env_name.lower().replace(":", "-")
-            try:
-                result = subprocess.run(
-                    ["docker", "inspect", "-f",
-                     "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
-                     container_name],
-                    capture_output=True, text=True, timeout=5,
-                )
-                ip = result.stdout.strip()
-                if not ip:
-                    logger.error(f"[TEACHER] Container {container_name} not found or no IP")
-                    return None
-            except Exception as e:
-                logger.error(f"[TEACHER] Failed to inspect container {container_name}: {e}")
+            if env_name not in ENV_CONFIGS:
+                logger.error(f"[TEACHER] Unknown environment: {env_name}")
                 return None
 
-            self._env_instances[env_name] = af_env.load_env(
-                mode="url",
-                base_url=f"http://{ip}:8000",
-            )
-            logger.info(f"[TEACHER] Connected to {env_name} container at {ip}:8000")
+            config = ENV_CONFIGS[env_name]
+
+            # Discover hosts using the same config as regular workers
+            tmp = SDKEnvironment.__new__(SDKEnvironment)
+            tmp.config = config
+            tmp._mode_override = None
+            hosts, mode = tmp._get_hosts_and_mode()
+
+            try:
+                env_instance = af_env.load_env(
+                    image=config.docker_image,
+                    mode=mode,
+                    hosts=hosts,
+                    replicas=len(hosts),
+                    container_name=env_name.lower().replace(":", "-"),
+                    connect_only=True,
+                )
+                self._env_instances[env_name] = env_instance
+                logger.info(f"[TEACHER] Connected to {env_name} ({mode}, hosts={hosts})")
+            except Exception as e:
+                logger.error(f"[TEACHER] Failed to connect to {env_name}: {e}")
+                return None
 
         return self._env_instances[env_name]
 
