@@ -280,6 +280,21 @@ _ENV_CONFIGS_CANONICAL = {
         },
     ),
 
+    # Distill environment — evaluates student against teacher rollouts
+    # (produced by teacher_worker) stored in R2. The student does a
+    # /v1/completions forward pass with echo=True to get per-token logprobs,
+    # which are compared to the teacher's stored logprobs; score = exp(-|KL|).
+    "distill": EnvConfig(
+        name="distill",
+        docker_image="affinefoundation/distill:latest",
+        env_vars={"UVICORN_WORKERS": "4"},
+        mem_limit="2g",
+        eval_params={
+            "temperature": 0.0,
+            "timeout": 600,
+        },
+    ),
+
     # MemoryGym environment (LLM memory management evaluation)
     # Evaluates: information intake, storage decisions, retrieval, change tracking, reasoning.
     # Each evaluation runs a full episode (~10-40 min depending on model).
@@ -379,6 +394,10 @@ _ENV_ALIASES = {
     "KNOWLEDGE-EVAL": "knowledge-eval",
     "knowledge_eval": "knowledge-eval",
     "KNOWLEDGE_EVAL": "knowledge-eval",
+
+    # Distill aliases
+    "DISTILL": "distill",
+    "Distill": "distill",
 }
 
 # Build final ENV_CONFIGS with aliases
