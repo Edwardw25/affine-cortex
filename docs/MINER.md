@@ -183,6 +183,8 @@ af commit --repo <username/repo> --revision <SHA> --chute-id <chute_id>
 af commit --repo myuser/Affine-model --revision abc123def456 --chute-id chute_789xyz
 ```
 
+> **Note:** Each hotkey can only have one commit on-chain. If you want to run new models, you need to register and use separate hotkeys.
+
 ## CLI Reference
 
 ### Query Commands
