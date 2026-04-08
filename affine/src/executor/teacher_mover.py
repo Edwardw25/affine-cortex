@@ -41,7 +41,9 @@ R2_SECRET_KEY = os.getenv("R2_SECRET_KEY")
 R2_TEACHER_BUCKET = os.getenv("R2_TEACHER_BUCKET", "affine-distill-private")
 R2_TEACHER_PENDING_PREFIX = os.getenv("R2_TEACHER_PENDING_PREFIX", "pending")
 R2_TEACHER_PROMOTED_PREFIX = os.getenv("R2_TEACHER_PROMOTED_PREFIX", "promoted")
-R2_PUBLIC_BUCKET = os.getenv("R2_PUBLIC_BUCKET", "affine-distill-public")
+R2_DISTILL_PUBLIC_BUCKET = os.getenv(
+    "R2_DISTILL_PUBLIC_BUCKET", "affine-distill-public"
+)
 
 # Mover cadence
 MOVER_INTERVAL_SEC = int(os.getenv("MOVER_INTERVAL_SEC", "3600"))
@@ -59,7 +61,7 @@ class TeacherMover:
         interval_sec: int = MOVER_INTERVAL_SEC,
         count: int = MOVER_COUNT,
         private_bucket: str = R2_TEACHER_BUCKET,
-        public_bucket: str = R2_PUBLIC_BUCKET,
+        public_bucket: str = R2_DISTILL_PUBLIC_BUCKET,
         pending_prefix: str = R2_TEACHER_PENDING_PREFIX,
         promoted_prefix: str = R2_TEACHER_PROMOTED_PREFIX,
     ):
