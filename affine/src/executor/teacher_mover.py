@@ -38,9 +38,9 @@ R2_ACCESS_KEY = os.getenv("R2_ACCESS_KEY")
 R2_SECRET_KEY = os.getenv("R2_SECRET_KEY")
 
 # Source (private) and target (public) buckets
-R2_TEACHER_BUCKET = os.getenv("R2_TEACHER_BUCKET", "affine-distill-private")
-R2_TEACHER_PENDING_PREFIX = os.getenv("R2_TEACHER_PENDING_PREFIX", "pending")
-R2_TEACHER_PROMOTED_PREFIX = os.getenv("R2_TEACHER_PROMOTED_PREFIX", "promoted")
+R2_DISTILL_PRIVATE_BUCKET = os.getenv("R2_DISTILL_PRIVATE_BUCKET", "affine-distill-private")
+R2_DISTILL_PENDING_PREFIX = os.getenv("R2_DISTILL_PENDING_PREFIX", "pending")
+R2_DISTILL_PROMOTED_PREFIX = os.getenv("R2_DISTILL_PROMOTED_PREFIX", "promoted")
 R2_DISTILL_PUBLIC_BUCKET = os.getenv(
     "R2_DISTILL_PUBLIC_BUCKET", "affine-distill-public"
 )
@@ -60,10 +60,10 @@ class TeacherMover:
         self,
         interval_sec: int = MOVER_INTERVAL_SEC,
         count: int = MOVER_COUNT,
-        private_bucket: str = R2_TEACHER_BUCKET,
+        private_bucket: str = R2_DISTILL_PRIVATE_BUCKET,
         public_bucket: str = R2_DISTILL_PUBLIC_BUCKET,
-        pending_prefix: str = R2_TEACHER_PENDING_PREFIX,
-        promoted_prefix: str = R2_TEACHER_PROMOTED_PREFIX,
+        pending_prefix: str = R2_DISTILL_PENDING_PREFIX,
+        promoted_prefix: str = R2_DISTILL_PROMOTED_PREFIX,
     ):
         self.interval_sec = interval_sec
         self.count = count

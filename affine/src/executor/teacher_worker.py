@@ -44,8 +44,8 @@ R2_ENDPOINT = os.getenv(
 )
 # Private bucket the teacher writes to. The mover will promote a random
 # subset to the corresponding public bucket.
-R2_TEACHER_BUCKET = os.getenv("R2_TEACHER_BUCKET", "affine-distill-private")
-R2_TEACHER_PENDING_PREFIX = os.getenv("R2_TEACHER_PENDING_PREFIX", "pending")
+R2_DISTILL_PRIVATE_BUCKET = os.getenv("R2_DISTILL_PRIVATE_BUCKET", "affine-distill-private")
+R2_DISTILL_PENDING_PREFIX = os.getenv("R2_DISTILL_PENDING_PREFIX", "pending")
 R2_ACCESS_KEY = os.getenv("R2_ACCESS_KEY")
 R2_SECRET_KEY = os.getenv("R2_SECRET_KEY")
 
@@ -108,9 +108,9 @@ class TeacherWorker:
         the key written.
         """
         epoch_ms = int(time.time() * 1000)
-        key = f"{R2_TEACHER_PENDING_PREFIX}/{env_name}/{epoch_ms}.json"
+        key = f"{R2_DISTILL_PENDING_PREFIX}/{env_name}/{epoch_ms}.json"
         body = json.dumps(data, separators=(",", ":"))
-        self._s3.put_object(Bucket=R2_TEACHER_BUCKET, Key=key, Body=body)
+        self._s3.put_object(Bucket=R2_DISTILL_PRIVATE_BUCKET, Key=key, Body=body)
         return key
 
     async def _get_sampling_list(self, env: str) -> List[int]:
@@ -306,8 +306,8 @@ class TeacherWorker:
         logger.info(
             f"[TEACHER] Starting: model={self.teacher_model} "
             f"envs={self.envs} concurrency={self.concurrency} "
-            f"private_bucket={R2_TEACHER_BUCKET} "
-            f"pending_prefix={R2_TEACHER_PENDING_PREFIX}"
+            f"private_bucket={R2_DISTILL_PRIVATE_BUCKET} "
+            f"pending_prefix={R2_DISTILL_PENDING_PREFIX}"
         )
         self.running = True
 
