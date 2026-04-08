@@ -2,16 +2,14 @@
 Teacher Worker - Generates teacher rollouts with logprobs for KL divergence.
 
 Runs as an independent process alongside regular executor workers.
-Picks random task_ids from each environment's sampling_list,
-evaluates with the teacher model (collect_logprobs=True),
-and uploads results to R2 as sequential KL task_ids.
+Picks random task_ids from each environment's sampling_list, evaluates
+with the teacher model (collect_logprobs=True), and uploads results to a
+private R2 bucket. A separate teacher_mover process periodically promotes
+a random subset to the public bucket that the distill env reads from.
 
-R2 structure:
-    teacher_rollouts/
-      task_00000000001.json
-      task_00000000002.json
-      ...
-      metadata.json  {"completed_up_to": N}
+Private bucket layout:
+    pending/{ENV}/{epoch_ms}.json   - new rollouts waiting to be promoted
+    promoted/{ENV}/{epoch_ms}.json  - already promoted by the mover
 """
 
 import asyncio
@@ -44,8 +42,10 @@ R2_ENDPOINT = os.getenv(
     "R2_ENDPOINT",
     "https://af76430a7056e37bd99ee03a4468d893.r2.cloudflarestorage.com",
 )
-R2_BUCKET = os.getenv("R2_BUCKET", "affine-swe-infinite-public")
-R2_PREFIX = os.getenv("R2_TEACHER_PREFIX", "teacher_rollouts")
+# Private bucket the teacher writes to. The mover will promote a random
+# subset to the corresponding public bucket.
+R2_TEACHER_BUCKET = os.getenv("R2_TEACHER_BUCKET", "affine-distill-private")
+R2_TEACHER_PENDING_PREFIX = os.getenv("R2_TEACHER_PENDING_PREFIX", "pending")
 R2_ACCESS_KEY = os.getenv("R2_ACCESS_KEY")
 R2_SECRET_KEY = os.getenv("R2_SECRET_KEY")
 
@@ -77,7 +77,6 @@ class TeacherWorker:
 
         self._config_dao = SystemConfigDAO()
         self._s3 = None
-        self._next_id = 1
         self._env_instances = {}
         self._env_connect_lock = asyncio.Lock()
         self.running = False
@@ -101,32 +100,18 @@ class TeacherWorker:
             ),
         )
 
-    async def _load_next_id(self) -> int:
-        """Load next_id from R2 metadata.json."""
-        try:
-            resp = self._s3.get_object(
-                Bucket=R2_BUCKET,
-                Key=f"{R2_PREFIX}/metadata.json",
-            )
-            meta = json.loads(resp["Body"].read())
-            return meta.get("completed_up_to", 0) + 1
-        except self._s3.exceptions.NoSuchKey:
-            return 1
-        except Exception as e:
-            logger.warning(f"[TEACHER] Failed to load metadata: {e}, starting from 1")
-            return 1
+    def _upload_rollout(self, env_name: str, data: Dict) -> str:
+        """Upload a rollout to the private bucket under pending/{env}/.
 
-    def _upload_rollout(self, task_id: int, data: Dict) -> None:
-        """Upload rollout to R2."""
-        key = f"{R2_PREFIX}/task_{task_id:011d}.json"
+        File name is the upload epoch in milliseconds, which is sortable
+        and collision-free at the teacher's serial upload rate. Returns
+        the key written.
+        """
+        epoch_ms = int(time.time() * 1000)
+        key = f"{R2_TEACHER_PENDING_PREFIX}/{env_name}/{epoch_ms}.json"
         body = json.dumps(data, separators=(",", ":"))
-        self._s3.put_object(Bucket=R2_BUCKET, Key=key, Body=body)
-
-    def _update_metadata(self, completed_up_to: int) -> None:
-        """Update metadata.json in R2."""
-        key = f"{R2_PREFIX}/metadata.json"
-        body = json.dumps({"completed_up_to": completed_up_to})
-        self._s3.put_object(Bucket=R2_BUCKET, Key=key, Body=body)
+        self._s3.put_object(Bucket=R2_TEACHER_BUCKET, Key=key, Body=body)
+        return key
 
     async def _get_sampling_list(self, env: str) -> List[int]:
         """Get current sampling_list for an environment from SystemConfig.
@@ -300,13 +285,11 @@ class TeacherWorker:
                 rollout = await self._generate_one_rollout()
 
                 if rollout:
-                    async with self._upload_lock:
-                        tid = self._next_id
-                        await asyncio.to_thread(self._upload_rollout, tid, rollout)
-                        await asyncio.to_thread(self._update_metadata, tid)
-                        self._next_id += 1
+                    key = await asyncio.to_thread(
+                        self._upload_rollout, rollout["env"], rollout
+                    )
                     logger.info(
-                        f"[TEACHER-{worker_id}] Uploaded task_{tid:011d}.json "
+                        f"[TEACHER-{worker_id}] Uploaded {key} "
                         f"(env={rollout['env']} original_task={rollout['original_task_id']} "
                         f"score={rollout['score']:.2f})"
                     )
@@ -320,11 +303,11 @@ class TeacherWorker:
     async def run(self):
         """Main loop: run concurrent workers generating rollouts."""
         self._init_s3()
-        self._next_id = await self._load_next_id()
-        self._upload_lock = asyncio.Lock()
         logger.info(
             f"[TEACHER] Starting: model={self.teacher_model} "
-            f"envs={self.envs} next_id={self._next_id} concurrency={self.concurrency}"
+            f"envs={self.envs} concurrency={self.concurrency} "
+            f"private_bucket={R2_TEACHER_BUCKET} "
+            f"pending_prefix={R2_TEACHER_PENDING_PREFIX}"
         )
         self.running = True
 
@@ -391,7 +374,7 @@ async def run_service(
     envs: List[str],
     concurrency: int,
 ):
-    """Run teacher worker as a standalone service."""
+    """Run teacher worker (and optional mover) as a standalone service."""
     import signal
 
     from affine.database.client import init_client
@@ -405,24 +388,39 @@ async def run_service(
         concurrency=concurrency,
     )
 
+    # Optional in-process mover that promotes pending rollouts to public
+    mover = None
+    if os.getenv("TEACHER_MOVER_ENABLED", "1") not in ("0", "false", "False"):
+        from affine.src.executor.teacher_mover import TeacherMover
+
+        mover = TeacherMover()
+
     shutdown_event = asyncio.Event()
 
     def handle_shutdown(sig):
         logger.info(f"[TEACHER] Received signal {sig}, shutting down...")
         worker.stop()
+        if mover is not None:
+            mover.stop()
         shutdown_event.set()
 
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda s=sig: handle_shutdown(s))
 
+    tasks = [asyncio.create_task(worker.run(), name="teacher-worker")]
+    if mover is not None:
+        tasks.append(asyncio.create_task(mover.run(), name="teacher-mover"))
+
     try:
-        await worker.run()
+        await asyncio.gather(*tasks)
     except Exception as e:
         logger.error(f"[TEACHER] Fatal: {e}", exc_info=True)
         raise
     finally:
         worker.stop()
+        if mover is not None:
+            mover.stop()
 
 
 @click.command()

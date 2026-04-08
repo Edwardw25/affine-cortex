@@ -138,7 +138,7 @@
       "sampling_config": {
         "dataset_range": [[30, 50]],
         "dataset_range_source": {
-          "url": "https://pub-7882418a56434a479bf9a7febd660b36.r2.dev/teacher_rollouts/metadata.json",
+          "url": "https://pub-4546777cb27840ec91b892f19eb5742b.r2.dev/metadata.json",
           "field": "completed_up_to",
           "range_type": "zero_to_value"
         },
