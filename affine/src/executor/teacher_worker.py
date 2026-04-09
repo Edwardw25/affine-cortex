@@ -17,7 +17,7 @@ import json
 import os
 import random
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import click
 import boto3
@@ -35,7 +35,7 @@ TEACHER_ENVS = ["CORPUS-EVAL"]
 # synthesize a large virtual sampling range when SystemConfig doesn't
 # define one. This is the teacher-side fallback; the regular executor
 # never goes through here.
-_CORPUS_EVAL_VIRTUAL_RANGE = 10_000_000
+_CORPUS_EVAL_VIRTUAL_RANGE = 1_000_000_000
 
 # R2 configuration
 R2_ENDPOINT = os.getenv(
@@ -113,7 +113,7 @@ class TeacherWorker:
         self._s3.put_object(Bucket=R2_DISTILL_PRIVATE_BUCKET, Key=key, Body=body)
         return key
 
-    async def _get_sampling_list(self, env: str) -> List[int]:
+    async def _get_sampling_list(self, env: str) -> Sequence[int]:
         """Get current sampling_list for an environment from SystemConfig.
 
         corpus-eval has an unbounded virtual task_id space (see
@@ -128,7 +128,9 @@ class TeacherWorker:
         sampling_config = env_config.get("sampling_config", {})
         lst = sampling_config.get("sampling_list", [])
         if not lst and env.upper() == "CORPUS-EVAL":
-            return list(range(_CORPUS_EVAL_VIRTUAL_RANGE))
+            # range is a lazy sequence; random.choice works on it
+            # without materializing ~1B ints into memory.
+            return range(_CORPUS_EVAL_VIRTUAL_RANGE)
         return lst
 
     async def _get_env(self, env_name: str):
