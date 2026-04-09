@@ -133,16 +133,16 @@
     },
     "DISTILL": {
       "enabled_for_sampling": true,
-      "enabled_for_scoring": false,
+      "enabled_for_scoring": true,
       "min_completeness": 0.6,
       "sampling_config": {
-        "dataset_range": [[30, 100]],
+        "dataset_range": [[30, 110]],
         "dataset_range_source": {
           "url": "https://pub-4546777cb27840ec91b892f19eb5742b.r2.dev/metadata.json",
           "field": "completed_up_to",
           "range_type": "zero_to_value"
         },
-        "sampling_count": 40,
+        "sampling_count": 80,
         "rotation_enabled": true,
         "rotation_count": 1,
         "rotation_interval": 3600,
