@@ -168,7 +168,7 @@ async def resolve_dataset_range_source(
                         f"HTTP {resp.status} from {url}"
                     )
                     return None
-                data = await resp.json()
+                data = await resp.json(content_type=None)
 
         value = _extract_field(data, field_path)
         value = int(value)
