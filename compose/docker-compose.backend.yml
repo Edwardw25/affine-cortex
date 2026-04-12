@@ -15,6 +15,7 @@ services:
       - API_HOST=0.0.0.0
       - API_SERVICES_ENABLED=true
       - API_RATE_LIMIT_ENABLED=false
+      - API_FULL_DATA_ENABLED=true
       - API_LOG_LEVEL=INFO
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/"]
@@ -119,6 +120,8 @@ services:
       - API_URL=http://api:8000/api/v1
       - SCORER_SAVE_TO_DB=true
       - SERVICE_MODE=true
+    env_file:
+      - .env
     depends_on:
       api:
         condition: service_healthy
