@@ -1,234 +1,130 @@
 """
-Stage 2: Pareto Frontier Anti-Plagiarism Filtering
+Pareto Dominance Comparison
 
-Implements Pareto dominance-based filtering to detect and exclude
-plagiarized models using multi-environment performance analysis.
+Single comparison primitive used by ChampionChallenge for champion
+challenges, champion dominance detection, and pairwise Pareto dominance.
+
+Margin scales linearly from WIN_MARGIN_START to WIN_MARGIN_END
+as checkpoint progresses. Supports strict Pareto (all envs) and
+partial Pareto (N of M envs + not worse in rest).
 """
 
-from typing import Dict, List, Any
-from affine.src.scorer.models import (
-    MinerData,
-    ParetoComparison,
-    Stage2Output,
-)
+from typing import Dict, List, Optional
+from affine.src.scorer.models import MinerData, ParetoComparison
 from affine.src.scorer.config import ScorerConfig
-from affine.src.scorer.utils import calculate_required_score
-
-from affine.core.setup import logger
 
 
 class Stage2ParetoFilter:
-    """Stage 2: Pareto Frontier Anti-Plagiarism Filtering.
-    
-    Core Algorithm:
-    1. Sort miners by first_block (earlier = higher priority)
-    2. For each subset, compare all miner pairs
-    3. Apply Pareto dominance test with error rate reduction threshold
-    4. Filter dominated miners from subset participation
-    
-    Dominance Rule:
-    - Miner A dominates Miner B if A came first and B cannot beat A's
-      required threshold (0.2 + 0.8 * A's score) in ALL environments
-    """
-    
+
     def __init__(self, config: ScorerConfig = ScorerConfig):
-        """Initialize Stage 2 Pareto filter.
-
-        Args:
-            config: Scorer configuration (defaults to global config)
-        """
         self.config = config
-        self.score_precision = config.SCORE_PRECISION
-    
-    def filter(
-        self,
-        miners: Dict[int, MinerData],
-        subsets: Dict[str, Dict[str, Any]]
-    ) -> Stage2Output:
-        """Apply Pareto filtering to all subsets.
-        
-        Args:
-            miners: Dict of MinerData objects from Stage 1
-            subsets: Dict of subset metadata from utils.generate_all_subsets()
-                Format: {
-                    "L2_sat_abd": {
-                        "layer": 2,
-                        "envs": ["sat", "abd"],
-                        "key": "L2_sat_abd"
-                    }
-                }
-                
-        Returns:
-            Stage2Output with updated miners and comparison results
-        """
-        logger.info(f"Stage 2: Starting Pareto filtering for {len(subsets)} subsets")
-        
-        # Sort miners by first_block (earlier blocks first)
-        sorted_miners = sorted(
-            miners.values(),
-            key=lambda m: (m.first_block, m.uid)
-        )
-        
-        comparisons: List[ParetoComparison] = []
-        filtered_count = 0
-        
-        # Process each subset
-        for subset_key, subset_info in subsets.items():
-            subset_envs = subset_info["envs"]
-            
-            # Find miners with valid scores in all subset environments
-            valid_miners_for_subset = []
-            for miner in sorted_miners:
-                # Check if miner has valid scores in all subset environments
-                has_all_envs = all(
-                    env in miner.env_scores and miner.env_scores[env].is_valid
-                    for env in subset_envs
-                )
-                if has_all_envs:
-                    valid_miners_for_subset.append(miner)
-            
-            # Skip subset if fewer than 2 miners
-            if len(valid_miners_for_subset) < 2:
-                continue
-            
-            # Perform pairwise Pareto comparisons
-            # {dominated_uid: dominator_uid}
-            dominated_in_subset: Dict[int, int] = {}
 
-            for i, miner_a in enumerate(valid_miners_for_subset):
-                for miner_b in valid_miners_for_subset[i + 1:]:
-                    # A came before B (sorted by first_block)
-                    comparison = self._compare_miners(
-                        miner_a,
-                        miner_b,
-                        subset_envs,
-                        subset_key
-                    )
-
-                    comparisons.append(comparison)
-
-                    # Track dominated miners with dominator uid
-                    if comparison.a_dominates_b:
-                        dominated_in_subset[miner_b.uid] = miner_a.uid
-                    elif comparison.b_dominates_a:
-                        dominated_in_subset[miner_a.uid] = miner_b.uid
-                        logger.debug(
-                            f"Subset {subset_key}: UID {miner_b.uid} dominates UID {miner_a.uid}"
-                        )
-
-            # Update miners with filtering results
-            for miner_uid, dominator_uid in dominated_in_subset.items():
-                if miner_uid in miners:
-                    miners[miner_uid].filtered_subsets.append(subset_key)
-                    miners[miner_uid].filter_reasons[subset_key] = f"dom>{dominator_uid}"
-                    filtered_count += 1
-
-                    logger.debug(
-                        f"UID {miner_uid} filtered from {subset_key} (dominated by UID {dominator_uid})"
-                    )
-        
-        logger.info(
-            f"Stage 2: Completed Pareto filtering - "
-            f"{filtered_count} subset participations filtered"
-        )
-        
-        return Stage2Output(
-            miners=miners,
-            comparisons=comparisons,
-            filtered_count=filtered_count
-        )
-    
     def _compare_miners(
         self,
         miner_a: MinerData,
         miner_b: MinerData,
         envs: List[str],
-        subset_key: str
+        label: str,
+        min_dominant_envs: Optional[int] = None,
+        checkpoint: Optional[int] = None,
     ) -> ParetoComparison:
-        """Compare two miners using Pareto dominance test.
-        
-        Dominance Rule:
-        - First determine winner in each environment using threshold
-        - A dominates B only if A wins in ALL environments
-        - B dominates A only if B wins in ALL environments
-        - Otherwise they are non-dominated
-        
-        Winner Determination:
-        - If A came first: B wins if B > threshold(A), else A wins
-        - If B came first: A wins if A > threshold(B), else B wins
-        
-        Args:
-            miner_a: Earlier miner (lower first_block)
-            miner_b: Later miner (higher first_block)
-            envs: List of environment names in subset
-            subset_key: Subset identifier for logging
-            
-        Returns:
-            ParetoComparison result
+        """Pareto comparison: A vs B across `envs`. A is the incumbent.
+
+        min_dominant_envs: override config (0=strict, N=partial).
+        checkpoint: current CP, used to interpolate margin between
+            WIN_MARGIN_START (early, lenient) and WIN_MARGIN_END
+            (dethrone, strict). None = use MARGIN_START.
         """
-        env_comparisons = {}
-        
-        # Track who wins in each environment
-        a_wins_count = 0
-        b_wins_count = 0
-        
+        min_dom = min_dominant_envs if min_dominant_envs is not None \
+            else self.config.WIN_MIN_DOMINANT_ENVS
+
+        # Determine margin:
+        # - Champion challenge: interpolate between MARGIN_START and MARGIN_END by CP
+        # - Pairwise / champion dominance (no checkpoint): use fixed PARETO_MARGIN
+        if checkpoint is not None:
+            m_start = self.config.WIN_MARGIN_START
+            m_end = self.config.WIN_MARGIN_END
+            cp_first = self.config.CHAMPION_WARMUP_CHECKPOINTS + 1
+            cp_last = self.config.CHAMPION_DETHRONE_MIN_CHECKPOINT
+            if cp_last > cp_first:
+                t = min(1.0, max(0.0, (checkpoint - cp_first) / (cp_last - cp_first)))
+            else:
+                t = 1.0
+            margin = m_start + t * (m_end - m_start)
+        else:
+            margin = self.config.PARETO_MARGIN
+        b_dominant = 0   # envs where B beats A by margin
+        b_not_worse = 0  # envs where B >= A (no margin required)
+        a_dominant = 0
+        a_not_worse = 0
+        env_details: Dict[str, Dict] = {}
+        n_compared = 0
+
         for env in envs:
-            # Get scores and threshold (already validated in filter())
-            env_score_a = miner_a.env_scores[env]
-            env_score_b = miner_b.env_scores[env]
+            es_a = miner_a.env_scores.get(env)
+            es_b = miner_b.env_scores.get(env)
+            if not es_a or not es_b:
+                env_details[env] = {"winner": None, "reason": "missing_env"}
+                continue
 
-            # Align scores to common tasks using all available samples (not just sampling list)
-            common_tasks = set(env_score_a.all_task_scores) & set(env_score_b.all_task_scores)
-            if common_tasks:
-                score_a = sum(env_score_a.all_task_scores[t] for t in common_tasks) / len(common_tasks)
-                score_b = sum(env_score_b.all_task_scores[t] for t in common_tasks) / len(common_tasks)
-                # Recompute threshold from A's aligned score and intersection count
-                env_threshold_config = self.config.ENV_THRESHOLD_CONFIGS.get(env, {})
-                threshold = calculate_required_score(
-                    score_a,
-                    len(common_tasks),
-                    env_threshold_config.get('z_score', self.config.Z_SCORE),
-                    env_threshold_config.get('min_improvement', self.config.MIN_IMPROVEMENT),
-                    env_threshold_config.get('max_improvement', self.config.MAX_IMPROVEMENT),
-                )
+            common = set(es_a.all_task_scores) & set(es_b.all_task_scores)
+            if not common:
+                env_details[env] = {"winner": None, "reason": "no_common_tasks"}
+                continue
+
+            score_a = sum(es_a.all_task_scores[t] for t in common) / len(common)
+            score_b = sum(es_b.all_task_scores[t] for t in common) / len(common)
+            n_compared += 1
+
+            # B exceeds A by margin → B dominant in this env
+            if score_b > score_a + margin + 1e-9:
+                b_dominant += 1
+                b_not_worse += 1
+                winner = "B"
+            elif score_b >= score_a - 1e-9:
+                # B is not worse (at least tied)
+                b_not_worse += 1
+                a_not_worse += 1
+                winner = "A"  # incumbent advantage: tie goes to A
             else:
-                # Fall back to pre-computed avg scores and threshold
-                score_a = env_score_a.avg_score
-                score_b = env_score_b.avg_score
-                threshold = env_score_a.threshold
+                # B is worse
+                a_not_worse += 1
+                winner = "A"
 
-            # B wins if it beats the threshold (with epsilon for floating point comparison)
-            eps = 1e-9
-            b_wins_env = score_b > (threshold + eps)
+            # A exceeds B by margin → A dominant in this env
+            if score_a > score_b + margin + 1e-9:
+                a_dominant += 1
 
-            if b_wins_env:
-                b_wins_count += 1
-            else:
-                a_wins_count += 1
-
-            # Store comparison details
-            env_comparisons[env] = {
+            env_details[env] = {
                 "a_score": score_a,
                 "b_score": score_b,
-                "threshold": threshold,
-                "b_beats_threshold": b_wins_env,
-                "winner": "B" if b_wins_env else "A",
-                "aligned_tasks": len(common_tasks) if common_tasks else None,
+                "margin": round(margin, 4),
+                "threshold": score_a + margin,
+                "winner": winner,
+                "common_tasks": len(common),
             }
-        
-        # Determine dominance based on winning all environments
-        # A dominates B only if A wins in ALL environments
-        a_dominates_b = (a_wins_count == len(envs))
-        
-        # B dominates A only if B wins in ALL environments
-        b_dominates_a = (b_wins_count == len(envs))
-        
+
+        # "A wins env" = B did not exceed A by margin (incumbent advantage).
+        # Under strict Pareto (min_dom=0): A dominates B iff A wins all envs
+        # (i.e., B never exceeded margin in any env).
+        a_wins = n_compared - b_dominant  # envs where B did NOT beat A by margin
+
+        if min_dom > 0 and n_compared > 0:
+            # Partial Pareto: B needs at least min_dom envs exceeding margin,
+            # AND not be worse (< score_a) in any env.
+            b_dominates_a = (b_dominant >= min_dom and b_not_worse == n_compared)
+            a_dominates_b = (a_dominant >= min_dom and a_not_worse == n_compared)
+        else:
+            # Strict Pareto (original behavior): B must exceed margin in ALL,
+            # A dominates if B never exceeded margin in any env.
+            b_dominates_a = (b_dominant == n_compared and n_compared > 0)
+            a_dominates_b = (a_wins == n_compared and n_compared > 0)
+
         return ParetoComparison(
             miner_a_uid=miner_a.uid,
             miner_b_uid=miner_b.uid,
-            subset_key=subset_key,
+            label=label,
             a_dominates_b=a_dominates_b,
             b_dominates_a=b_dominates_a,
-            env_comparisons=env_comparisons
+            env_comparisons=env_details,
         )
-    

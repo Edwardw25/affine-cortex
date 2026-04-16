@@ -1,208 +1,132 @@
 """
 Scorer Configuration
 
-Central configuration for the scoring algorithm.
-All parameters are defined as constants for clarity and maintainability.
+Central configuration for the champion challenge scoring system.
+Every parameter listed here has a clear, single use in the algorithm.
 """
 
 from typing import Dict, Any
 
 
 class ScorerConfig:
-    """Configuration for the four-stage scoring algorithm."""
-    
-    # Stage 2: Pareto Frontier Anti-Plagiarism
-    Z_SCORE: float = 2.0
-    """
-    Z-score for statistical confidence interval in threshold calculation.
+    """Configuration for the champion challenge scoring algorithm."""
 
-    Uses standard error (SE) based approach to adjust threshold by sample size:
-    - SE = sqrt(p * (1-p) / n)
-    - gap = z * SE
+    # ── Pareto Comparison ────────────────────────────────────────────────────
 
-    Z-score values:
-    - 1.0: ~68% confidence (more aggressive, smaller gaps)
-    - 1.5: ~87% confidence (balanced)
-    - 1.96: 95% confidence (more conservative, larger gaps)
+    WIN_MARGIN_START: float = 0.02
+    """Margin at the first post-warmup checkpoint (CP = warmup+1).
 
-    Higher sample counts → smaller SE → smaller gap → easier to beat.
-    Lower sample counts → larger SE → larger gap → harder to beat.
-
-    Recommended value: 2.0
+    Low bar early: protects models from being terminated by bad luck
+    when data is still sparse.
     """
 
-    MIN_IMPROVEMENT: float = 0.02
-    """
-    Minimum improvement required for later miner to beat earlier miner.
+    WIN_MARGIN_END: float = 0.03
+    """Margin at the dethrone checkpoint (CP = CHAMPION_DETHRONE_MIN_CHECKPOINT).
 
-    Ensures that even with very large sample sizes (small SE), there's still
-    a minimum gap to prevent noise and random fluctuations from allowing
-    copies to beat originals.
-
-    Example: If SE-based gap = 0.01 but MIN_IMPROVEMENT = 0.02,
-    the actual gap used will be 0.02.
-
-    Recommended value: 0.02 (2%)
+    Higher bar for the decisive comparison: only genuinely better models
+    can take the crown. Margin scales linearly between start and end
+    as checkpoints progress.
     """
 
-    MAX_IMPROVEMENT: float = 0.10
+    WIN_MIN_DOMINANT_ENVS: int = 3
+    """Champion challenge: minimum environments where the challenger must
+    exceed by PARETO_MARGIN. Remaining environments must not be worse
+    (score_b >= score_a).
+
+    0 = strict: must exceed in ALL environments.
+    N > 0 = partial: exceed in at least N, not lose in any other.
     """
-    Maximum improvement threshold cap.
 
-    Caps the required score gap to prevent unreasonably high thresholds
-    when sample size is very small (large SE).
+    PARETO_MIN_DOMINANT_ENVS: int = 0
+    """Pareto dominance filter: minimum environments for dominance.
 
-    Example: If SE-based gap = 0.25 but MAX_IMPROVEMENT = 0.10,
-    the actual gap used will be capped at 0.10.
-
-    Recommended value: 0.10 (10%)
+    Defaults to 0 (strict Pareto) — a miner must be dominated in ALL
+    environments to be eliminated. This avoids false positives: a
+    legitimately improved miner that wins some envs and loses others
+    should not be eliminated.
     """
-    
-    SCORE_PRECISION: int = 3
-    """Number of decimal places for score comparison (avoid floating point issues)."""
-    
-    # Stage 3: Subset Scoring
-    MAX_LAYERS: int = 1
-    """Maximum number of layers to evaluate. Set to 1 to only evaluate the last layer (all environments combined)."""
-    
-    SUBSET_WEIGHT_EXPONENT: int = 2
-    """Exponent base for layer weights (layer_weight = N * base^(layer-1))."""
-    
+
+    PARETO_MARGIN: float = 0.04
+    """Fixed margin for pairwise and champion dominance comparisons.
+
+    Higher than champion challenge margin to avoid terminating miners
+    that simply fine-tuned one env slightly. Pairwise does not use
+    dynamic margin — it's always this fixed value.
+    """
+
+    # ── Geometric Mean ────────────────────────────────────────────────────
+
     GEOMETRIC_MEAN_EPSILON: float = 0.1
-    """
-    Smoothing epsilon for geometric mean calculation.
+    """Smoothing offset for geometric mean (dethrone tiebreaker).
 
-    Shifts all scores by +ε before computing geometric mean, then shifts
-    back by -ε. This prevents zero scores from collapsing the entire
-    geometric mean to 0, which is critical when a new environment is added
-    and all miners initially score 0.
-
-    Score range shifts from [0, 1] to [ε, 1+ε].
-
-    Formula: GM_smoothed = ((v1+ε) × (v2+ε) × ... × (vn+ε))^(1/n) - ε
-
-    Set to 0.0 to disable smoothing (original behavior).
-    Recommended value: 0.1
+    Prevents zero scores in any single env from collapsing the entire
+    geo-mean to 0. Computed as ((v1+ε)·(v2+ε)·...·(vn+ε))^(1/n) - ε.
     """
 
-    DECAY_FACTOR: float = 0.5
-    """
-    Rank-based decay factor for score_proportional weighting.
+    # ── Score Normalization ──────────────────────────────────────────────────
 
-    Applied as: adjusted_score = score × decay_factor^(rank - 1)
-    - Rank 1: score × 1.0
-    - Rank 2: score × decay_factor^1
-    - Rank 3: score × decay_factor^2
-
-    Set to 1.0 to disable decay (all ranks weighted equally).
-    Set to 0.5 for exponential decay (each rank gets 50% of previous).
-    """
-    
-    # Stage 4: Weight Normalization
-    MIN_WEIGHT_THRESHOLD: float = 0.01
-    """Minimum weight threshold (1%). Miners below this are set to 0."""
-    
-    # Stage 1: Data Collection
-    MIN_COMPLETENESS: float = 0.9
-    """Minimum sample completeness required."""
-    
-    # Environment Score Normalization
-    # Format: env_name -> (min_score, max_score)
-    # Scores will be normalized to [0, 1] range: (score - min) / (max - min)
     ENV_SCORE_RANGES: Dict[str, tuple] = {
-        'agentgym:sciworld': (-100, 100.0)  # sciworld 分数范围 0-100
+        'agentgym:sciworld': (-100, 100.0),
     }
+    """Per-environment score normalization. Maps env_name → (min, max) so
+    raw scores are normalized to [0, 1] before any comparison."""
 
-    # Environment-specific threshold difficulty configs
-    # Format: env_name -> {z_score, min_improvement, max_improvement}
-    # Lower values = easier to beat (lower difficulty)
-    # Higher values = harder to beat (higher difficulty)
-    ENV_THRESHOLD_CONFIGS: Dict[str, Dict[str, float]] = {
-        'GAME': {'z_score': 2.0},
-        'PRINT': {'z_score': 2.0},
-        'SWE-SYNTH': {'z_score': 2.0},
-        'SWE-INFINITE': {'z_score': 2.0},
-    }
-    
-    # ELO Parameters
-    ELO_D: float = 400.0
-    """Rating difference scale factor for expected score calculation."""
+    # ── Champion Challenge ───────────────────────────────────────────────────
 
-    ELO_K_BASE: float = 32.0
-    """Base K-factor (update step size) for established miners."""
+    CHAMPION_WARMUP_CHECKPOINTS: int = 2
+    """First K checkpoints don't count toward wins/losses. Early checkpoints
+    have less data and noisier comparisons; this protects good models from
+    being terminated by random fluctuations during ramp-up."""
 
-    ELO_K_PROVISIONAL: float = 96.0
-    """Higher K-factor for new/provisional miners to converge faster."""
+    CHAMPION_DETHRONE_MIN_CHECKPOINT: int = 10
+    """Minimum checkpoint to be eligible for dethrone. A challenger must
+    reach this CP and dominate the champion in a single comparison to
+    take the crown. CP=10 means 10×window_size common tasks
+    (e.g., window=100 → 1000 tasks)."""
 
-    ELO_PROVISIONAL_ROUNDS: int = 48
-    """Number of rounds a miner is considered provisional (~1 day)."""
+    CHAMPION_TERMINATION_TOTAL_LOSSES: int = 3
+    """Accumulated post-warmup losses → terminate sampling."""
 
-    ELO_BASE_RATING: float = 1200.0
-    """Initial ELO rating for new miners. Set below average (1500) to prevent
-    new-hotkey spam attacks: miners must prove skill before climbing to top."""
+    CHAMPION_TERMINATION_CONSECUTIVE_LOSSES: int = 2
+    """Consecutive post-warmup losses → terminate sampling."""
 
-    ELO_SENIORITY_ALPHA: float = 0.0
-    """Seniority advantage factor. 0.0 disables seniority bonus."""
+    PARETO_MIN_WINDOWS: int = 3
+    """Minimum windows of common tasks before pairwise Pareto fires.
 
-    ELO_ABSENCE_DECAY_RATE: float = 0.95
-    """Per-unit decay rate. Applied as: excess * rate^(units^power)."""
+    Pairwise filter terminates plagiarized models: when two non-champion
+    miners share at least PARETO_MIN_WINDOWS × window_size common tasks,
+    run a Pareto comparison. The earlier-registered miner is the incumbent
+    and the dominated miner is terminated.
+    """
 
-    ELO_ABSENCE_DECAY_POWER: float = 1.4
-    """Power exponent for accelerating decay over time."""
+    # ── Export ───────────────────────────────────────────────────────────────
 
-    ELO_ABSENCE_DECAY_UNIT: int = 1800
-    """Time unit (seconds) for decay progression. 1800 = 30min → ~12h convergence."""
-
-    ELO_ABSENCE_DECAY_UNIT_DOMINATED: int = 900
-    """Faster decay unit for Pareto-dominated miners. 900 = 15min → ~6h convergence."""
-
-
-    # Database & Storage
-    SCORE_RECORD_TTL_DAYS: int = 30
-    """TTL for score_snapshots table (in days)."""
-    
     @classmethod
     def to_dict(cls) -> Dict[str, Any]:
-        """Export configuration as dictionary for storage in snapshots."""
         return {
-            'z_score': cls.Z_SCORE,
-            'min_improvement': cls.MIN_IMPROVEMENT,
-            'max_improvement': cls.MAX_IMPROVEMENT,
-            'score_precision': cls.SCORE_PRECISION,
-            'max_layers': cls.MAX_LAYERS,
-            'subset_weight_exponent': cls.SUBSET_WEIGHT_EXPONENT,
-            'decay_factor': cls.DECAY_FACTOR,
-            'min_weight_threshold': cls.MIN_WEIGHT_THRESHOLD,
-            'min_completeness': cls.MIN_COMPLETENESS,
+            'win_margin_start': cls.WIN_MARGIN_START,
+            'win_margin_end': cls.WIN_MARGIN_END,
+            'win_min_dominant_envs': cls.WIN_MIN_DOMINANT_ENVS,
+            'pareto_min_dominant_envs': cls.PARETO_MIN_DOMINANT_ENVS,
             'geometric_mean_epsilon': cls.GEOMETRIC_MEAN_EPSILON,
-            'elo_d': cls.ELO_D,
-            'elo_k_base': cls.ELO_K_BASE,
-            'elo_k_provisional': cls.ELO_K_PROVISIONAL,
-            'elo_provisional_rounds': cls.ELO_PROVISIONAL_ROUNDS,
-            'elo_base_rating': cls.ELO_BASE_RATING,
-            'elo_seniority_alpha': cls.ELO_SENIORITY_ALPHA,
-            'elo_absence_decay_rate': cls.ELO_ABSENCE_DECAY_RATE,
-            'elo_absence_decay_power': cls.ELO_ABSENCE_DECAY_POWER,
+            'champion_warmup_checkpoints': cls.CHAMPION_WARMUP_CHECKPOINTS,
+            'champion_dethrone_min_checkpoint': cls.CHAMPION_DETHRONE_MIN_CHECKPOINT,
+            'champion_termination_total_losses': cls.CHAMPION_TERMINATION_TOTAL_LOSSES,
+            'champion_termination_consecutive_losses': cls.CHAMPION_TERMINATION_CONSECUTIVE_LOSSES,
+            'pareto_min_windows': cls.PARETO_MIN_WINDOWS,
         }
-    
+
     @classmethod
     def validate(cls):
-        """Validate configuration parameters."""
-        assert cls.Z_SCORE > 0.0, "Z_SCORE must be positive"
-        assert cls.MIN_IMPROVEMENT >= 0.0, "MIN_IMPROVEMENT must be non-negative"
-        assert cls.MAX_IMPROVEMENT >= cls.MIN_IMPROVEMENT, "MAX_IMPROVEMENT must be >= MIN_IMPROVEMENT"
-        assert cls.SCORE_PRECISION >= 0, "SCORE_PRECISION must be non-negative"
-        assert cls.SUBSET_WEIGHT_EXPONENT >= 2, "SUBSET_WEIGHT_EXPONENT must be >= 2"
-        assert 0.0 <= cls.DECAY_FACTOR <= 1.0, "DECAY_FACTOR must be in [0, 1]"
-        assert 0.0 <= cls.MIN_WEIGHT_THRESHOLD <= 1.0, "MIN_WEIGHT_THRESHOLD must be in [0, 1]"
-        assert 0.0 <= cls.MIN_COMPLETENESS <= 1.0, "MIN_COMPLETENESS must be in [0, 1]"
+        assert 0.0 < cls.WIN_MARGIN_START < 1.0, "WIN_MARGIN_START must be in (0, 1)"
+        assert 0.0 < cls.WIN_MARGIN_END < 1.0, "WIN_MARGIN_END must be in (0, 1)"
+        assert cls.WIN_MARGIN_END >= cls.WIN_MARGIN_START, "WIN_MARGIN_END must be >= START"
         assert cls.GEOMETRIC_MEAN_EPSILON >= 0.0, "GEOMETRIC_MEAN_EPSILON must be non-negative"
-        assert cls.ELO_D > 0.0, "ELO_D must be positive"
-        assert cls.ELO_K_BASE > 0.0, "ELO_K_BASE must be positive"
-        assert cls.ELO_K_PROVISIONAL > 0.0, "ELO_K_PROVISIONAL must be positive"
-        assert cls.ELO_PROVISIONAL_ROUNDS >= 0, "ELO_PROVISIONAL_ROUNDS must be non-negative"
-        assert cls.ELO_BASE_RATING > 0.0, "ELO_BASE_RATING must be positive"
-        assert cls.ELO_SENIORITY_ALPHA >= 0.0, "ELO_SENIORITY_ALPHA must be non-negative"
+        assert cls.CHAMPION_WARMUP_CHECKPOINTS >= 0, "CHAMPION_WARMUP_CHECKPOINTS must be >= 0"
+        assert cls.CHAMPION_DETHRONE_MIN_CHECKPOINT >= 1, "CHAMPION_DETHRONE_MIN_CHECKPOINT must be >= 1"
+        assert cls.CHAMPION_TERMINATION_TOTAL_LOSSES >= 1, "CHAMPION_TERMINATION_TOTAL_LOSSES must be >= 1"
+        assert cls.CHAMPION_TERMINATION_CONSECUTIVE_LOSSES >= 1, "CHAMPION_TERMINATION_CONSECUTIVE_LOSSES must be >= 1"
+        assert cls.PARETO_MIN_WINDOWS >= 1, "PARETO_MIN_WINDOWS must be >= 1"
 
 
 # Validate configuration on import
